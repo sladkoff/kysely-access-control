@@ -1,9 +1,9 @@
 {
-  "name": "kysely-access-control",
+  "name": "@sladkoff/kysely-access-control",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "module": "index.ts",
-  "version": "0.0.6",
+  "version": "0.0.8",
   "scripts": {
     "compile": "tsc -p tsconfig.build.json"
   },
