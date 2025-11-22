@@ -452,4 +452,203 @@ describe("kysely-grants", () => {
       `update "person" set "first_name" = $1 from "rsvp" where "person"."id" = 1 and "rsvp"."person_id" = "person"."id"`
     );
   });
+
+  test("defaultColumnBehavior omit should omit columns without explicit grants in select", async () => {
+    const plugin = createPlugin([
+      {
+        table: "person",
+        for: "select",
+        columns: ["id", "first_name"],
+        defaultColumnBehavior: "omit",
+      },
+    ]);
+
+    const { sql } = db
+      .withPlugin(plugin)
+      .selectFrom("person")
+      .select(["id", "first_name", "last_name", "ssn"])
+      .compile();
+
+    // last_name and ssn should be omitted, only id and first_name should remain
+    expect(sql).toEqual(
+      `select "id", "first_name" from "person"`
+    );
+  });
+
+  test("defaultColumnBehavior omit should omit columns in returning clauses", async () => {
+    const plugin = createPlugin([
+      {
+        table: "person",
+        for: "select",
+        columns: ["id", "first_name"],
+        defaultColumnBehavior: "omit",
+      },
+      {
+        table: "person",
+        for: "insert",
+        columns: ["first_name", "last_name"],
+      },
+    ]);
+
+    const { sql } = db
+      .withPlugin(plugin)
+      .insertInto("person")
+      .values({ first_name: "John", last_name: "Doe" })
+      .returning(["id", "first_name", "last_name", "ssn"])
+      .compile();
+
+    // ssn should be omitted, only id, first_name, and last_name should remain
+    expect(sql).toContain(`"id"`);
+    expect(sql).toContain(`"first_name"`);
+    expect(sql).toContain(`"last_name"`);
+    expect(sql).not.toContain(`"ssn"`);
+  });
+
+  test("defaultColumnBehavior deny should deny columns without explicit grants (default behavior)", async () => {
+    const plugin = createPlugin([
+      {
+        table: "person",
+        for: "select",
+        columns: ["id", "first_name"],
+        defaultColumnBehavior: "deny",
+      },
+    ]);
+
+    const ex = await expectAndReturnError(
+      db
+        .withPlugin(plugin)
+        .selectFrom("person")
+        .select(["id", "first_name", "last_name"])
+        .execute()
+    );
+
+    expect(ex.message).toEqual("SELECT denied on column person.last_name");
+  });
+
+  test("defaultColumnBehavior not set should deny columns without explicit grants (default behavior)", async () => {
+    const plugin = createPlugin([
+      {
+        table: "person",
+        for: "select",
+        columns: ["id", "first_name"],
+      },
+    ]);
+
+    const ex = await expectAndReturnError(
+      db
+        .withPlugin(plugin)
+        .selectFrom("person")
+        .select(["id", "first_name", "last_name"])
+        .execute()
+    );
+
+    expect(ex.message).toEqual("SELECT denied on column person.last_name");
+  });
+
+  test("defaultColumnBehavior omit should still deny in insert context", async () => {
+    const plugin = createPlugin([
+      {
+        table: "person",
+        for: "select",
+        columns: ["id", "first_name"],
+        defaultColumnBehavior: "omit",
+      },
+      {
+        table: "person",
+        for: "insert",
+        columns: ["first_name"],
+      },
+    ]);
+
+    const ex = await expectAndReturnError(
+      db
+        .withPlugin(plugin)
+        .insertInto("person")
+        .values({ first_name: "John", last_name: "Doe" })
+        .execute()
+    );
+
+    // Should deny, not omit, because Omit is not supported in insert context
+    expect(ex.message).toEqual("INSERT denied on column person.last_name");
+  });
+
+  test("defaultColumnBehavior omit should still deny in update context", async () => {
+    const plugin = createPlugin([
+      {
+        table: "person",
+        for: "select",
+        columns: ["id", "first_name"],
+        defaultColumnBehavior: "omit",
+      },
+      {
+        table: "person",
+        for: "update",
+        columns: ["first_name"],
+      },
+    ]);
+
+    const ex = await expectAndReturnError(
+      db
+        .withPlugin(plugin)
+        .updateTable("person")
+        .set({ first_name: "John", last_name: "Doe" })
+        .execute()
+    );
+
+    // Should deny, not omit, because Omit is not supported in update context
+    expect(ex.message).toEqual("UPDATE denied on column person.last_name");
+  });
+
+  test("defaultColumnBehavior omit should work with multiple grants", async () => {
+    const plugin = createPlugin([
+      {
+        table: "person",
+        for: "select",
+        columns: ["id"],
+        defaultColumnBehavior: "omit",
+      },
+      {
+        table: "person",
+        for: "select",
+        columns: ["first_name"],
+        // No defaultColumnBehavior - should default to deny
+      },
+    ]);
+
+    const { sql } = db
+      .withPlugin(plugin)
+      .selectFrom("person")
+      .select(["id", "first_name", "last_name", "ssn"])
+      .compile();
+
+    // id and first_name should be included (explicitly granted)
+    // last_name and ssn should be omitted (no grant, but defaultColumnBehavior: "omit" from first grant)
+    expect(sql).toContain(`"id"`);
+    expect(sql).toContain(`"first_name"`);
+    expect(sql).not.toContain(`"last_name"`);
+    expect(sql).not.toContain(`"ssn"`);
+  });
+
+  test("defaultColumnBehavior omit should work with grant for all statement types", async () => {
+    const plugin = createPlugin([
+      {
+        table: "person",
+        for: "all",
+        columns: ["id", "first_name"],
+        defaultColumnBehavior: "omit",
+      },
+    ]);
+
+    const { sql } = db
+      .withPlugin(plugin)
+      .selectFrom("person")
+      .select(["id", "first_name", "last_name", "ssn"])
+      .compile();
+
+    // last_name and ssn should be omitted
+    expect(sql).toContain(`"id"`);
+    expect(sql).toContain(`"first_name"`);
+    expect(sql).not.toContain(`"last_name"`);
+    expect(sql).not.toContain(`"ssn"`);
+  });
 });

@@ -9,6 +9,7 @@ import {
   ColumnUsageContext,
   Deny,
   KyselyAccessControlGuard,
+  Omit,
   StatementType,
 } from "./kyselyAccessControl";
 
@@ -20,6 +21,7 @@ type GrantWithoutWhereClause<
   schema?: string;
   for: "all" | "select" | "update" | "insert" | "delete";
   columns?: (keyof KyselyDatabase[TableName])[];
+  defaultColumnBehavior?: "deny" | "omit";
 };
 
 type GrantWithWhereClause<
@@ -159,6 +161,30 @@ export const createKyselyGrantGuard = <KyselyDatabase>(
       });
 
       if (!allowGrant) {
+        // Check if we should return Omit instead of Deny for select/returning contexts
+        if (columnUsageContext === ColumnUsageContext.ColumnInSelectOrReturning) {
+          // Look for any grant for the same table with defaultColumnBehavior: "omit"
+          // For returning clauses, we check select grants (returning uses select permissions)
+          // For select statements, we check the statement type
+          const grantWithOmitBehavior = grants.find((grant) => {
+            const rightSchemaAndTable =
+              (grant.schema === undefined || grant.schema === table.schema?.name) &&
+              grant.table === table.identifier.name;
+
+            // Check if grant matches: "all", current statement type, or "select" (for returning clauses)
+            const rightStatementType =
+              grant.for === "all" ||
+              grant.for === statementType ||
+              grant.for === StatementType.Select;
+
+            return rightSchemaAndTable && rightStatementType && grant.defaultColumnBehavior === "omit";
+          });
+
+          if (grantWithOmitBehavior) {
+            return Omit;
+          }
+        }
+
         return Deny;
       }
 
