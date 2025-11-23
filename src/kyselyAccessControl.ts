@@ -33,6 +33,51 @@ export const Allow = "allow" as const;
 export const Deny = "deny" as const;
 export const Omit = "omit" as const;
 
+// WeakMap to track OperationNodes that should bypass access control
+const bypassAccessControlNodes = new WeakMap<OperationNode, boolean>();
+
+/**
+ * Marks a query builder to bypass access control when used in subqueries.
+ * Use this for query builders created from `db` (without plugin) that you want
+ * to embed via jsonArrayFrom/jsonObjectFrom.
+ * 
+ * This works by wrapping the query builder in a proxy that intercepts
+ * `.toOperationNode()` and marks the resulting node in a WeakMap.
+ * 
+ * @example
+ * ```typescript
+ * const rsvps = bypassAccessControl(db.selectFrom("rsvp").select("id"));
+ * return [jsonArrayFrom(rsvps).as("rsvps")];
+ * ```
+ */
+export function bypassAccessControl<T extends { toOperationNode(): OperationNode }>(qb: T): T {
+  return new Proxy(qb, {
+    get(target, prop) {
+      if (prop === "toOperationNode") {
+        return () => {
+          const node = target.toOperationNode();
+          // Mark the node to bypass access control in WeakMap
+          bypassAccessControlNodes.set(node, true);
+          return node;
+        };
+      }
+      const value = (target as any)[prop];
+      // If it's a function that returns a query builder, wrap it too
+      if (typeof value === "function" && prop !== "toOperationNode") {
+        return (...args: any[]) => {
+          const result = value.apply(target, args);
+          // If the result is a query builder-like object, wrap it
+          if (result && typeof result === "object" && "toOperationNode" in result) {
+            return bypassAccessControl(result);
+          }
+          return result;
+        };
+      }
+      return value;
+    },
+  }) as T;
+}
+
 type TAllow = typeof Allow;
 type TDeny = typeof Deny;
 type TOmit = typeof Omit;
@@ -365,6 +410,13 @@ export const createAccessControlPlugin = <KyselyDatabase = unknown>(
      */
     protected transformSelectQuery(node: SelectQueryNode): SelectQueryNode {
       const { from: fromNode, selections, joins, where } = node;
+
+      // Skip access control for nested subqueries that were explicitly marked to bypass
+      // This happens when a query builder is wrapped with bypassAccessControl()
+      if (bypassAccessControlNodes.has(node)) {
+        // This subquery was marked to bypass access control, skip enforcement
+        return super.transformSelectQuery(node);
+      }
 
       if (!fromNode) {
         // This covers queries such as select 1, or select following only by subselects

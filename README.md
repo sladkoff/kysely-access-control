@@ -215,6 +215,8 @@ For example, the following pattern will not work:
 
 Use the full table name without aliases in subqueries to ensure proper permission enforcement.
 
+**Note**: If you need to use table aliases in a subquery and want to bypass access control, you can use `bypassAccessControl()` to skip the checks, but this should be done with caution as it may introduce security risks.
+
 # Features
 
 ## Table/Column Statement Type + Context Controls
@@ -287,6 +289,44 @@ At column level select statements, you can choose `Omit` as a third option to `A
 If you choose this option, the column you select will be omitted from the query, and the query will still succeed.
 
 This also works for `returning` clauses as well, whether they are on a top level insert, update, or delete statement.
+
+## Bypassing Access Control for Subqueries
+
+In some cases, you may want to embed a subquery that should bypass access control checks. This is useful when:
+
+1. **Embedding queries from a different context**: You want to include data from a table that the current user doesn't have access to, but you've already validated the access at a higher level.
+2. **Performance optimization**: You want to avoid redundant access control checks on subqueries that you know are safe.
+3. **Complex query patterns**: You're building complex queries where some subqueries need different access control behavior.
+
+Use the `bypassAccessControl()` helper function to mark a query builder so that its subquery will skip access control enforcement:
+
+```typescript
+import { bypassAccessControl, createAccessControlPlugin } from 'kysely-access-control';
+import { jsonArrayFrom } from 'kysely/helpers/postgres';
+
+const plugin = createAccessControlPlugin(guard);
+
+// In a query with access control
+const result = await db
+  .withPlugin(plugin)
+  .selectFrom("person")
+  .select((qb) => {
+    // This subquery will bypass access control checks
+    const rsvps = bypassAccessControl(qb.selectFrom("rsvp").select("id"));
+    
+    return [
+      "person.first_name",
+      "person.last_name",
+      jsonArrayFrom(rsvps).as("rsvps"),
+    ];
+  })
+  .execute();
+```
+
+**Important Notes:**
+- `bypassAccessControl()` only affects the specific query builder it wraps. Other parts of the query still have access control enforced.
+- Use this feature carefully - bypassing access control can introduce security vulnerabilities if not used correctly.
+- The function works by marking the query builder, so it must be called before the query builder is used in `jsonArrayFrom`/`jsonObjectFrom` or other subquery contexts.
 
 # Contributing
 

@@ -8,7 +8,10 @@ import {
   PostgresQueryCompiler,
 } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
-import { createAccessControlPlugin } from "./kyselyAccessControl";
+import {
+  bypassAccessControl,
+  createAccessControlPlugin,
+} from "./kyselyAccessControl";
 import { Grant, createKyselyGrantGuard } from "./kyselyGrants";
 
 interface Person {
@@ -470,9 +473,7 @@ describe("kysely-grants", () => {
       .compile();
 
     // last_name and ssn should be omitted, only id and first_name should remain
-    expect(sql).toEqual(
-      `select "id", "first_name" from "person"`
-    );
+    expect(sql).toEqual(`select "id", "first_name" from "person"`);
   });
 
   test("defaultColumnBehavior omit should omit columns in returning clauses", async () => {
@@ -650,5 +651,31 @@ describe("kysely-grants", () => {
     expect(sql).toContain(`"first_name"`);
     expect(sql).not.toContain(`"last_name"`);
     expect(sql).not.toContain(`"ssn"`);
+  });
+
+  test("bypassAccessControl should bypass access control on subqueries", async () => {
+    const plugin = createPlugin([
+      {
+        table: "person",
+        for: "select",
+      },
+    ]);
+
+    const { sql } = db
+      .withPlugin(plugin)
+      .selectFrom("person")
+      .select((qb) => {
+        const rsvps = bypassAccessControl(qb.selectFrom("rsvp").select("id"));
+        return [
+          "person.first_name",
+          "person.last_name",
+          jsonArrayFrom(rsvps).as("rsvps"),
+        ];
+      })
+      .compile();
+
+    expect(sql).toEqual(
+      `select "person"."first_name", "person"."last_name", (select coalesce(json_agg(agg), '[]') from (select "id" from "rsvp") as agg) as "rsvps" from "person"`
+    );
   });
 });
